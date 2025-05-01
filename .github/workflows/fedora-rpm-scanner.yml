@@ -56,10 +56,10 @@ jobs:
           path="vendor/$rpm"
 
           cat <<EOF > deps-${name}.yml
-- name: $name
-  path: $path
-  version: $version
-EOF
+          - name: $name
+            path: $path
+            version: $version
+          EOF
 
       - name: Upload zipped deps fragment
         if: steps.check.outputs.has_results == 'true'
