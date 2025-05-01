@@ -44,7 +44,7 @@ jobs:
             echo "has_results=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Extract and generate fossa-deps
+      - name: Extract and generate logical fossa-deps
         if: steps.check.outputs.has_results == 'true'
         run: |
           mkdir -p vendor
@@ -57,10 +57,10 @@ jobs:
           curl -O "https://dl.fedoraproject.org/pub/epel/8/Everything/SRPMS/Packages/c/$rpm"
           rpm2cpio "$rpm" | cpio -idmv
 
-          # Move contents into vendor/<rpm>
+          # Move extracted contents into vendor/<rpm>
           find . -mindepth 1 -maxdepth 1 ! -name vendor -exec mv {} "$extract_dir"/ \;
 
-          # Generate vendored-dependencies entries
+          # Generate vendored-deps entries from logical subdirs
           mkdir -p fossa-partial
           deps_file="fossa-partial/deps-${rpm_basename}.yml"
           touch "$deps_file"
@@ -70,10 +70,11 @@ jobs:
           timestamp=$(date +%s)
           i=1
 
-          find "$extract_dir" -mindepth 1 -maxdepth 1 | while read path; do
-            size=$(du -sb "$path" | cut -f1)
+          # Logical subdirectories under 1MB
+          find "$extract_dir" -type d ! -path "$extract_dir" | while read dir; do
+            size=$(du -sb "$dir" | cut -f1)
             if [ "$size" -le $((1 * 1024 * 1024)) ]; then
-              rel_path=$(echo "$path" | sed 's|^vendor/||')
+              rel_path=$(echo "$dir" | sed 's|^vendor/||')
               frag_name="${name}-fragment-${i}-${timestamp}"
               echo "- name: $frag_name" >> "$deps_file"
               echo "  path: vendor/$rel_path" >> "$deps_file"
@@ -81,6 +82,15 @@ jobs:
               i=$((i + 1))
             fi
           done
+
+          # Include whole root dir if it's under 1MB
+          root_size=$(du -sb "$extract_dir" | cut -f1)
+          if [ "$root_size" -le $((1 * 1024 * 1024)) ]; then
+            frag_name="${name}-fragment-${i}-${timestamp}"
+            echo "- name: $frag_name" >> "$deps_file"
+            echo "  path: vendor/${rpm_basename}" >> "$deps_file"
+            echo "  version: $version" >> "$deps_file"
+          fi
 
       - name: Zip deps fragment
         if: steps.check.outputs.has_results == 'true'
@@ -94,22 +104,43 @@ jobs:
           name: fossa-fragment-${{ matrix.rpm }}
           path: fossa-deps-fragment-${{ matrix.rpm }}.zip
 
+      - name: Upload vendor directory
+        if: steps.check.outputs.has_results == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendor-${{ matrix.rpm }}
+          path: vendor
+
   merge-and-analyze:
     needs: scan-srpms
     runs-on: ubuntu-latest
-    name: Merge and Analyze
+    name: Merge + Analyze
 
     steps:
-      - name: Download all zipped deps fragments
+      - name: Download all zipped deps
         uses: actions/download-artifact@v4
         with:
           path: fragments
 
-      - name: Extract all fragments
+      - name: Extract fossa-deps fragments
         run: |
           mkdir merged-deps
           for zip in fragments/**/fossa-deps-fragment-*.zip; do
             unzip -o "$zip" -d merged-deps
+          done
+
+      - name: Download all vendor directories
+        uses: actions/download-artifact@v4
+        with:
+          path: vendor
+
+      - name: Merge vendor trees
+        run: |
+          mkdir -p vendor
+          find vendor -mindepth 2 -maxdepth 3 -type f,d | while read path; do
+            dest="vendor/$(basename $(dirname "$path"))"
+            mkdir -p "$dest"
+            cp -r "$path" "$dest/" || true
           done
 
       - name: Combine into final fossa-deps.yml
@@ -130,7 +161,7 @@ jobs:
 
       - name: Run FOSSA Analyze
         run: |
-          fossa analyze --exclude-path . --debug
+          fossa analyze --debug
 
       - name: Upload final fossa-deps.yml
         uses: actions/upload-artifact@v4
