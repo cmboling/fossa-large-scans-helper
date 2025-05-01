@@ -1,0 +1,107 @@
+name: Full EPEL SRPM Scan and FOSSA Analyze
+
+on:
+  workflow_dispatch:
+
+env:
+  FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+
+jobs:
+
+  scan-srpms:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rpm:
+          - crun-wasm-0.0-1.el8.src.rpm
+          - clibs-list-0.4.1-1.el8.src.rpm
+          - composer-generators-0.1.2-1.el8.src.rpm
+          - create-fake-rpm-4-1.el8.src.rpm
+          - copr-selinux-1.54-1.el8.src.rpm
+          # Add more ≤ 1MB RPMs here
+    name: Scan ${{ matrix.rpm }}
+    outputs:
+      has_results: ${{ steps.check.outputs.has_results }}
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm2cpio cpio curl
+
+      - name: Download RPM
+        run: |
+          mkdir -p srpms
+          cd srpms
+          curl -O "https://dl.fedoraproject.org/pub/epel/8/Everything/SRPMS/Packages/c/${{ matrix.rpm }}"
+
+      - name: Skip if over 1MB
+        id: check
+        run: |
+          cd srpms
+          size_bytes=$(stat -c%s "${{ matrix.rpm }}")
+          if [ "$size_bytes" -gt $((1 * 1024 * 1024)) ]; then
+            echo "has_results=false" >> $GITHUB_OUTPUT
+            exit 0
+          else
+            echo "has_results=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate fossa-deps fragment
+        if: steps.check.outputs.has_results == 'true'
+        run: |
+          mkdir -p fossa-partial
+          cd fossa-partial
+
+          rpm="${{ matrix.rpm }}"
+          name=$(echo "$rpm" | sed -E 's/-[0-9].*\.src\.rpm$//')
+          version=$(echo "$rpm" | sed -E 's/^.*-([0-9][^-]*-[^.]*)\.src\.rpm$/\1/')
+          path="vendor/$rpm"
+
+          cat <<EOF > deps-${name}.yml
+          - name: $name
+            path: $path
+            version: $version
+          EOF
+
+      - name: Upload fragment
+        if: steps.check.outputs.has_results == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fossa-deps-fragments
+          path: fossa-partial/*.yml
+
+  merge-and-analyze:
+    needs: scan-srpms
+    runs-on: ubuntu-latest
+    name: Merge and Analyze
+    steps:
+      - name: Download all fragments
+        uses: actions/download-artifact@v4
+        with:
+          name: fossa-deps-fragments
+          path: merged-deps
+
+      - name: Combine into fossa-deps.yml
+        run: |
+          echo "vendored-dependencies:" > fossa-deps.yml
+          for file in merged-deps/*.yml; do
+            cat "$file" | sed 's/^/  /' >> fossa-deps.yml
+          done
+          echo "--- Combined fossa-deps.yml ---"
+          cat fossa-deps.yml
+
+      - name: Install FOSSA CLI
+        run: |
+          curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash
+          fossa --version
+
+      - name: Run FOSSA Analyze
+        run: |
+          fossa analyze --debug
+
+      - name: Upload final fossa-deps.yml
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-fossa-deps
+          path: fossa-deps.yml
