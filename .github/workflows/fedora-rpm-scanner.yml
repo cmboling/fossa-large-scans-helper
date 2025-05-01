@@ -125,10 +125,12 @@ jobs:
         run: |
           curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash
           fossa --version
+          ls -l
+          tree
 
       - name: Run FOSSA Analyze
         run: |
-          fossa analyze --debug
+          fossa analyze --exclude-path . --debug
 
       - name: Upload final fossa-deps.yml
         uses: actions/upload-artifact@v4
