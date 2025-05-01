@@ -20,9 +20,9 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y rpm2cpio cpio curl jq
+          sudo apt-get install -y rpm curl tar jq
 
-      - name: Download and extract RPM
+      - name: Download and extract RPM using rpm2archive
         run: |
           mkdir -p workspace/vendor
           rpm="${{ github.event.inputs.rpm }}"
@@ -30,9 +30,16 @@ jobs:
           extract_dir="workspace/vendor/${rpm_basename}"
           mkdir -p "$extract_dir"
           cd workspace
+
+          echo "📦 Downloading $rpm"
           curl -O "https://dl.fedoraproject.org/pub/epel/8/Everything/SRPMS/Packages/c/$rpm"
-          rpm2cpio "$rpm" | cpio -idmv
-          find . -mindepth 1 -maxdepth 1 ! -name vendor -exec mv {} "$extract_dir"/ \;
+
+          echo "📦 Converting RPM to .tar.gz"
+          rpm2archive "$rpm"
+          tarball="${rpm%.rpm}.tar.gz"
+
+          echo "📦 Extracting $tarball"
+          tar -xf "$tarball" -C "$extract_dir"
 
       - name: Split into ≤200MB fragments
         id: set
@@ -50,25 +57,30 @@ jobs:
           timestamp=$(date +%s)
           i=1
           max_size=$((200 * 1024 * 1024))
+          chunk_size=0
+          frag_dir="${rpm_basename}-fragment-${i}-${timestamp}"
+          mkdir -p "fragments/$frag_dir"
 
           find vendor -type f | while read file; do
             file_size=$(stat -c%s "$file")
-            if [ $((chunk_size + file_size)) -gt $max_size ] || [ ! -d "fragments/$frag_dir" ]; then
+            if [ $((chunk_size + file_size)) -gt $max_size ]; then
+              echo "{\"name\": \"${name}-fragment-${i}-${timestamp}\", \"path\": \"fragments/$frag_dir\", \"version\": \"$version\"}," >> "$deps_file"
+              i=$((i + 1))
               frag_dir="${rpm_basename}-fragment-${i}-${timestamp}"
               mkdir -p "fragments/$frag_dir"
               chunk_size=0
-              i=$((i + 1))
             fi
+
             rel_path="${file#vendor/}"
             mkdir -p "fragments/$frag_dir/$(dirname "$rel_path")"
             cp "$file" "fragments/$frag_dir/$rel_path"
             chunk_size=$((chunk_size + file_size))
-
-            # Record fragment
-            echo "{\"name\": \"$name-fragment-${i}-${timestamp}\", \"path\": \"fragments/$frag_dir\", \"version\": \"$version\"}," >> "$deps_file"
           done
 
-          sed -i '$ s/,$//' "$deps_file"
+          if [ "$chunk_size" -gt 0 ]; then
+            echo "{\"name\": \"${name}-fragment-${i}-${timestamp}\", \"path\": \"fragments/$frag_dir\", \"version\": \"$version\"}" >> "$deps_file"
+          fi
+
           echo "]" >> "$deps_file"
           echo "::set-output name=fragments::$(cat $deps_file | jq -c '.')"
 
@@ -102,10 +114,10 @@ jobs:
         run: |
           mkdir -p deps
           cat <<EOF > deps/${{ matrix.fragment.name }}.yml
-            - name: ${{ matrix.fragment.name }}
-              path: ${matrix.fragment.path}
-              version: ${{ matrix.fragment.version }}
-            EOF
+- name: ${{ matrix.fragment.name }}
+  path: ${matrix.fragment.path}
+  version: ${{ matrix.fragment.version }}
+EOF
 
       - name: Upload fragment deps
         uses: actions/upload-artifact@v4
