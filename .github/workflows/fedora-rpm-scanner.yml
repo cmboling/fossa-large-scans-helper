@@ -114,10 +114,10 @@ jobs:
         run: |
           mkdir -p deps
           cat <<EOF > deps/${{ matrix.fragment.name }}.yml
-- name: ${{ matrix.fragment.name }}
-  path: ${matrix.fragment.path}
-  version: ${{ matrix.fragment.version }}
-EOF
+          - name: ${{ matrix.fragment.name }}
+            path: ${matrix.fragment.path}
+            version: ${{ matrix.fragment.version }}
+          EOF
 
       - name: Upload fragment deps
         uses: actions/upload-artifact@v4
