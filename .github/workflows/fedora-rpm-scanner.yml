@@ -13,25 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         rpm:
-          - csmock-3.8.1-1.el8.src.rpm
-          - cros-guest-tools-126-3.el8.src.rpm
-          - catimg-2.7.0-3.el8.src.rpm
-          - CGSI-gSOAP-1.3.12-1.el8.src.rpm
-          - cxxopts-3.1.1-1.el8.src.rpm
-          - cotila-1.2.1-2.el8.src.rpm
-          - clusterssh-4.18-1.el8.src.rpm
-          - colord-kde-0.5.0-16.el8.src.rpm
-          - copr-cli-2.1-1.el8.src.rpm
-          - c-icap-modules-0.5.7-5.20250117git36a6688.el8.src.rpm
-          - calamaris-2.99.4.8-1.el8.src.rpm
-          - cacti-spine-1.2.30-1.el8.src.rpm
-          - castxml-0.6.11-1.el8.src.rpm
-          - cronolog-1.6.2-34.el8.src.rpm
-          - ccze-0.2.1-27.el8.src.rpm
-          - c4project-0^20230525gita1f9d73-3.el8.src.rpm
-          - cpuid-20230614-3.el8.src.rpm
-          - cpp-hocon-0.2.1-2.el8.src.rpm
-          - canl-c-3.0.0-8.el8.src.rpm
+          - chromium-133.0.6943.141-1.el8.src.rpm
 
     name: Scan ${{ matrix.rpm }}
     steps:
