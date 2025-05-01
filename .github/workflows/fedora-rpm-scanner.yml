@@ -1,4 +1,5 @@
-name: Fedora RPM + FOSSA Scan
+name: Full EPEL SRPM Scan + FOSSA Analyze
+
 on:
   workflow_dispatch:
 
@@ -17,7 +18,6 @@ jobs:
           - composer-generators-0.1.2-1.el8.src.rpm
           - create-fake-rpm-4-1.el8.src.rpm
           - copr-selinux-1.54-1.el8.src.rpm
-          # Add more RPMs ≤ 1MB here
 
     name: Scan ${{ matrix.rpm }}
     steps:
@@ -44,29 +44,50 @@ jobs:
             echo "has_results=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Generate fossa-deps fragment
+      - name: Extract and generate fossa-deps
         if: steps.check.outputs.has_results == 'true'
         run: |
-          mkdir -p fossa-partial
-          cd fossa-partial
-
+          mkdir -p vendor
           rpm="${{ matrix.rpm }}"
-          name=$(echo "$rpm" | sed -E 's/-[0-9].*\.src\.rpm$//')
-          version=$(echo "$rpm" | sed -E 's/^.*-([0-9][^-]*-[^.]*)\.src\.rpm$/\1/')
-          path="vendor/$rpm"
+          rpm_basename=$(basename "$rpm" .src.rpm)
+          extract_dir="vendor/${rpm_basename}"
+          mkdir -p "$extract_dir"
 
-          cat <<EOF > deps-${name}.yml
-          - name: $name
-            path: $path
-            version: $version
-          EOF
+          # Download and extract
+          curl -O "https://dl.fedoraproject.org/pub/epel/8/Everything/SRPMS/Packages/c/$rpm"
+          rpm2cpio "$rpm" | cpio -idmv
 
-      - name: Upload zipped deps fragment
+          # Move contents into vendor/<rpm>
+          find . -mindepth 1 -maxdepth 1 ! -name vendor -exec mv {} "$extract_dir"/ \;
+
+          # Generate vendored-dependencies entries
+          mkdir -p fossa-partial
+          deps_file="fossa-partial/deps-${rpm_basename}.yml"
+          touch "$deps_file"
+
+          version=$(echo "$rpm_basename" | sed -E 's/^[^-]+-//')
+          name=$(echo "$rpm_basename" | sed -E "s/-$version$//")
+          timestamp=$(date +%s)
+          i=1
+
+          find "$extract_dir" -mindepth 1 -maxdepth 1 | while read path; do
+            size=$(du -sb "$path" | cut -f1)
+            if [ "$size" -le $((1 * 1024 * 1024)) ]; then
+              rel_path=$(echo "$path" | sed 's|^vendor/||')
+              frag_name="${name}-fragment-${i}-${timestamp}"
+              echo "- name: $frag_name" >> "$deps_file"
+              echo "  path: vendor/$rel_path" >> "$deps_file"
+              echo "  version: $version" >> "$deps_file"
+              i=$((i + 1))
+            fi
+          done
+
+      - name: Zip deps fragment
         if: steps.check.outputs.has_results == 'true'
         run: |
           zip -j fossa-deps-fragment-${{ matrix.rpm }}.zip fossa-partial/*.yml
 
-      - name: Upload artifact
+      - name: Upload zipped artifact
         if: steps.check.outputs.has_results == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -76,7 +97,7 @@ jobs:
   merge-and-analyze:
     needs: scan-srpms
     runs-on: ubuntu-latest
-    name: Merge Deps + Run FOSSA Analyze
+    name: Merge and Analyze
 
     steps:
       - name: Download all zipped deps fragments
@@ -97,16 +118,15 @@ jobs:
           for file in merged-deps/*.yml; do
             cat "$file" | sed 's/^/  /' >> fossa-deps.yml
           done
+          echo "--- Final fossa-deps.yml ---"
+          cat fossa-deps.yml
 
       - name: Install FOSSA CLI
         run: |
           curl -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | bash
           fossa --version
-          ls -l
-          tree
-          
 
-      - name: Run FOSSA analyze
+      - name: Run FOSSA Analyze
         run: |
           fossa analyze --debug
 
